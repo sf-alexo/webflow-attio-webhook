@@ -46,10 +46,13 @@ export default async function handler(req, res) {
 
     if (name) {
       const parts = name.trim().split(/\s+/);
+      const firstName = parts[0];
+      const lastName = parts.slice(1).join(" ") || firstName;
     
       values.name = [{
-        first_name: parts[0],
-        last_name: parts.slice(1).join(" ") || parts[0],
+        first_name: firstName,
+        last_name: lastName,
+        full_name: name.trim(),
       }];
     }
 
