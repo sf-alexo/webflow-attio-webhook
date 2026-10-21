@@ -35,7 +35,6 @@ export default async function handler(req, res) {
       email_addresses: [
         {
           email_address: email,
-          is_primary: true,
         },
       ],
 
