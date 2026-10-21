@@ -5,6 +5,11 @@ export default async function handler(req, res) {
     });
   }
 
+  console.log("Webhook signature headers present:", {
+    timestamp: Boolean(req.headers["x-webflow-timestamp"]),
+    signature: Boolean(req.headers["x-webflow-signature"]),
+  });
+
   try {
     const body = req.body;
 
