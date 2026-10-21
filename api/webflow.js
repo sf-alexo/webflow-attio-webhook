@@ -45,7 +45,12 @@ export default async function handler(req, res) {
     };
 
     if (name) {
-      values.name = [{ full_name: name }];
+      const parts = name.trim().split(/\s+/);
+    
+      values.name = [{
+        first_name: parts[0],
+        last_name: parts.slice(1).join(" ") || parts[0],
+      }];
     }
 
     const response = await fetch(
