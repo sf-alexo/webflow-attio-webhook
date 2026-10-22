@@ -15,8 +15,9 @@ export default async function handler(req, res) {
     console.log("Webflow submission context:", {
       formName: payload?.name,
       siteId: payload?.siteId,
-      pageId: payload?.data?.["Page ID"],
-      pageUrl: payload?.data?.["Page URL"],
+      positionName: payload?.data?.position_name,
+      positionLink: payload?.data?.position_link,
+      pageUrl: payload?.data?.page_url,
       submittedAt: payload?.submittedAt,
     });
 
