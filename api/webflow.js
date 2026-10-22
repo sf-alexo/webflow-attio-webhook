@@ -1,7 +1,5 @@
 const CAMPAIGN = "2026-10 SUMMIT";
-
-// Temporary: log submission context only; skip Attio until page fields are verified.
-const ATTIO_ENABLED = false;
+const ATTIO_POSITION_LINK = "state-of-analytics-in-the-age-of-ai";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -11,28 +9,30 @@ export default async function handler(req, res) {
   try {
     const body = req.body;
     const payload = body?.payload ?? body;
+    const formData = payload?.data ?? {};
+    const positionLink = formData.position_link;
 
     console.log("Webflow submission context:", {
       formName: payload?.name,
       siteId: payload?.siteId,
-      positionName: payload?.data?.position_name,
-      positionLink: payload?.data?.position_link,
-      pageUrl: payload?.data?.page_url,
+      positionName: formData.position_name,
+      positionLink,
+      pageUrl: formData.page_url,
       submittedAt: payload?.submittedAt,
     });
-
-    if (!ATTIO_ENABLED) {
-      return res.status(200).json({
-        received: true,
-        attioSkipped: true,
-      });
-    }
 
     if (payload?.name !== "Registration-events-Form") {
       return res.status(200).json({ ignored: true });
     }
 
-    const formData = payload.data ?? {};
+    if (positionLink !== ATTIO_POSITION_LINK) {
+      return res.status(200).json({
+        received: true,
+        attioSkipped: true,
+        reason: "position_link not enabled for Attio",
+        positionLink: positionLink ?? null,
+      });
+    }
 
     const email = formData.Email?.trim().toLowerCase();
     const name = formData.Name?.trim();
