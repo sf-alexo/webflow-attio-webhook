@@ -1,5 +1,8 @@
 const CAMPAIGN = "2026-10 SUMMIT";
 
+// Temporary: log submission context only; skip Attio until page fields are verified.
+const ATTIO_ENABLED = false;
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -8,6 +11,21 @@ export default async function handler(req, res) {
   try {
     const body = req.body;
     const payload = body?.payload ?? body;
+
+    console.log("Webflow submission context:", {
+      formName: payload?.name,
+      siteId: payload?.siteId,
+      pageId: payload?.data?.["Page ID"],
+      pageUrl: payload?.data?.["Page URL"],
+      submittedAt: payload?.submittedAt,
+    });
+
+    if (!ATTIO_ENABLED) {
+      return res.status(200).json({
+        received: true,
+        attioSkipped: true,
+      });
+    }
 
     if (payload?.name !== "Registration-events-Form") {
       return res.status(200).json({ ignored: true });
