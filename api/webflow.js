@@ -1,5 +1,6 @@
 const CAMPAIGN = "2026-10 SUMMIT";
 const ATTIO_POSITION_LINK = "state-of-analytics-in-the-age-of-ai";
+const ATTIO_POSITION_NAME = "State of Analytics in the Age of AI";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -11,11 +12,12 @@ export default async function handler(req, res) {
     const payload = body?.payload ?? body;
     const formData = payload?.data ?? {};
     const positionLink = formData.position_link;
+    const positionName = formData.position_name;
 
     console.log("Webflow submission context:", {
       formName: payload?.name,
       siteId: payload?.siteId,
-      positionName: formData.position_name,
+      positionName,
       positionLink,
       pageUrl: formData.page_url,
       submittedAt: payload?.submittedAt,
@@ -25,12 +27,17 @@ export default async function handler(req, res) {
       return res.status(200).json({ ignored: true });
     }
 
-    if (positionLink !== ATTIO_POSITION_LINK) {
+    const shouldRunAttio =
+      positionLink === ATTIO_POSITION_LINK ||
+      positionName === ATTIO_POSITION_NAME;
+
+    if (!shouldRunAttio) {
       return res.status(200).json({
         received: true,
         attioSkipped: true,
-        reason: "position_link not enabled for Attio",
+        reason: "position not enabled for Attio",
         positionLink: positionLink ?? null,
+        positionName: positionName ?? null,
       });
     }
 
