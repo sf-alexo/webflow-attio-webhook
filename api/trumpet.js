@@ -2,13 +2,16 @@
  * SendTrumpet (trumpet) webhook receiver.
  * Docs: https://www.sendtrumpet.app/docs/webhooks
  *
- * Matches Companies in Attio by "SendTrumpet Pod URL" containing the pod ID,
- * then updates "Last Pod Activity date".
+ * Matches Companies in Attio by "SendTrumpet Pod URL" containing the pod ID
+ * (uses the first match if several), updates "Last Pod Activity", and creates
+ * a Person for the viewer email only when that email does not already exist.
  */
 
 // Attio attribute slugs on Companies
 const ATTIO_POD_URL_ATTRIBUTE = "sendtrumpet_pod_url";
 const ATTIO_LAST_POD_ACTIVITY_ATTRIBUTE = "last_pod_activity";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Extract pod ID from a Trumpet live URL.
@@ -33,6 +36,12 @@ function activityDateFromWebhook(created) {
 
   // Attio date attrs accept ISO and trim time; timestamp attrs keep full value.
   return date.toISOString();
+}
+
+function normalizeViewerEmail(viewer) {
+  if (!viewer || typeof viewer !== "string") return null;
+  const email = viewer.trim().toLowerCase();
+  return EMAIL_RE.test(email) ? email : null;
 }
 
 function attioHeaders(apiKey) {
@@ -101,6 +110,70 @@ async function updateCompanyLastPodActivity(apiKey, recordId, activityDate) {
   return response.json();
 }
 
+async function findPersonByEmail(apiKey, email) {
+  const response = await fetch(
+    "https://api.attio.com/v2/objects/people/records/query",
+    {
+      method: "POST",
+      headers: attioHeaders(apiKey),
+      body: JSON.stringify({
+        filter: {
+          email_addresses: email,
+        },
+        limit: 1,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const error = new Error("Attio people query failed");
+    error.status = response.status;
+    error.details = errorText;
+    throw error;
+  }
+
+  const result = await response.json();
+  return result.data?.[0] ?? null;
+}
+
+async function createPersonWithCompany(apiKey, email, companyRecordId) {
+  const response = await fetch(
+    "https://api.attio.com/v2/objects/people/records",
+    {
+      method: "POST",
+      headers: attioHeaders(apiKey),
+      body: JSON.stringify({
+        data: {
+          values: {
+            email_addresses: [
+              {
+                email_address: email,
+              },
+            ],
+            company: [
+              {
+                target_object: "companies",
+                target_record_id: companyRecordId,
+              },
+            ],
+          },
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const error = new Error("Attio people create failed");
+    error.status = response.status;
+    error.details = errorText;
+    throw error;
+  }
+
+  return response.json();
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -116,6 +189,7 @@ export default async function handler(req, res) {
     const data = body.data ?? {};
     const podId = data.pod ?? null;
     const activityDate = activityDateFromWebhook(body.created);
+    const viewerEmail = normalizeViewerEmail(data.viewer);
 
     console.log("Trumpet webhook received", {
       eventId: body.id,
@@ -127,6 +201,7 @@ export default async function handler(req, res) {
       expectedLiveUrlHint: podId ? `…/pods/${podId}/live` : null,
       content: data.content,
       viewer: data.viewer ?? null,
+      viewerEmail,
       crmType: data.crm?.type ?? null,
       crmObject: data.crm?.object ?? null,
       crmId: data.crm?.id ?? null,
@@ -185,13 +260,17 @@ export default async function handler(req, res) {
       };
     });
 
+    // If multiple Companies match one pod URL, use the first only.
+    const company = matches[0] ?? null;
+
     console.log("Attio company match by SendTrumpet Pod URL", {
       webhookPodId: podId,
       matchCount: matches.length,
+      selectedCompany: company,
       matches,
     });
 
-    if (matches.length === 0) {
+    if (!company) {
       return res.status(200).json({
         received: true,
         event: body.event ?? data.type ?? null,
@@ -203,55 +282,100 @@ export default async function handler(req, res) {
       });
     }
 
-    const updates = [];
+    let companyUpdated = false;
 
-    for (const match of matches) {
+    try {
+      await updateCompanyLastPodActivity(
+        apiKey,
+        company.recordId,
+        activityDate
+      );
+      companyUpdated = true;
+    } catch (error) {
+      console.error("Attio company update error:", {
+        status: error.status,
+        details: error.details,
+        recordId: company.recordId,
+        attribute: ATTIO_LAST_POD_ACTIVITY_ATTRIBUTE,
+      });
+    }
+
+    let personResult = {
+      action: "skipped",
+      reason: "No valid viewer email",
+    };
+
+    if (viewerEmail) {
       try {
-        await updateCompanyLastPodActivity(
-          apiKey,
-          match.recordId,
-          activityDate
-        );
+        const existingPerson = await findPersonByEmail(apiKey, viewerEmail);
 
-        updates.push({
-          recordId: match.recordId,
-          name: match.name,
-          updated: true,
-          lastPodActivityDate: activityDate,
-        });
+        if (existingPerson) {
+          personResult = {
+            action: "exists",
+            recordId: existingPerson.id?.record_id ?? null,
+            email: viewerEmail,
+          };
+
+          console.log("Attio Person already exists; not creating", personResult);
+        } else {
+          const created = await createPersonWithCompany(
+            apiKey,
+            viewerEmail,
+            company.recordId
+          );
+
+          personResult = {
+            action: "created",
+            recordId: created.data?.id?.record_id ?? null,
+            email: viewerEmail,
+            companyRecordId: company.recordId,
+          };
+
+          console.log("Attio Person created and linked to Company", personResult);
+        }
       } catch (error) {
-        console.error("Attio company update error:", {
+        console.error("Attio Person lookup/create error:", {
           status: error.status,
           details: error.details,
-          recordId: match.recordId,
-          attribute: ATTIO_LAST_POD_ACTIVITY_ATTRIBUTE,
+          email: viewerEmail,
+          companyRecordId: company.recordId,
         });
 
-        updates.push({
-          recordId: match.recordId,
-          name: match.name,
-          updated: false,
-          error: "Failed to update Last Pod Activity date",
-        });
+        personResult = {
+          action: "error",
+          email: viewerEmail,
+          error: "Failed to look up or create Person in Attio",
+        };
       }
     }
 
-    console.log("Attio Last Pod Activity date updates", {
-      activityDate,
-      updates,
-    });
+    if (!companyUpdated) {
+      return res.status(502).json({
+        received: true,
+        event: body.event ?? data.type ?? null,
+        eventId: body.id ?? null,
+        podId,
+        companyMatched: true,
+        matchCount: matches.length,
+        company,
+        activityDate,
+        companyUpdated: false,
+        error: "Failed to update Last Pod Activity date",
+        person: personResult,
+      });
+    }
 
-    const anyUpdated = updates.some((u) => u.updated);
-
-    return res.status(anyUpdated ? 200 : 502).json({
+    return res.status(200).json({
       received: true,
       event: body.event ?? data.type ?? null,
       eventId: body.id ?? null,
       podId,
       companyMatched: true,
       matchCount: matches.length,
+      company,
       activityDate,
-      updates,
+      companyUpdated: true,
+      person: personResult,
     });
   } catch (error) {
     console.error("Trumpet webhook processing failed", error);
