@@ -368,6 +368,7 @@ async function createCompanyNote(apiKey, companyRecordId, note, createdAt) {
 
 function isAttioWebhookPayload(body) {
   if (!body || typeof body !== "object") return false;
+  if (typeof body.webhook_id === "string") return true;
   if (Array.isArray(body.events)) return true;
   if (typeof body.event_type === "string") return true;
   return false;
@@ -460,7 +461,36 @@ async function updateCompanyPodUrl(apiKey, recordId, liveUrl) {
   return response.json();
 }
 
-async function createTrumpetPod({ apiKey, templateId, title, ownerEmail }) {
+/**
+ * Prefer ObjectId-based live URL for Attio matching.
+ * Engagement webhooks send data.pod as ObjectId; Trumpet's live_url may use a UUID.
+ */
+function buildMatchablePodUrl(podId, liveUrl) {
+  const hostOverride = process.env.TRUMPET_POD_HOST?.replace(/\/$/, "");
+
+  let origin = hostOverride || "https://trumpet.app";
+  if (!hostOverride && liveUrl) {
+    try {
+      origin = new URL(liveUrl).origin;
+    } catch {
+      // keep default
+    }
+  }
+
+  if (podId) {
+    return `${origin}/pods/${podId}/live`;
+  }
+
+  return liveUrl || null;
+}
+
+async function createTrumpetPod({
+  apiKey,
+  templateId,
+  title,
+  companyName,
+  ownerEmail,
+}) {
   const baseBody = {
     template_id: templateId,
   };
@@ -491,40 +521,59 @@ async function createTrumpetPod({ apiKey, templateId, title, ownerEmail }) {
     return { response, text, json };
   }
 
-  let result = await post({ ...baseBody, title });
+  // Zapier exposes Title + Recipient Company; REST docs omit them.
+  // Try likely field names without creating duplicate Pods (stop on first 2xx).
+  const namingAttempts = [
+    {
+      title,
+      name: title,
+      pod_name: title,
+      podName: title,
+      recipient_company: companyName || title,
+      recipientCompany: companyName || title,
+    },
+    { title, name: title, pod_name: title },
+    { title },
+    { name: title },
+    { pod_name: title },
+    { podName: title },
+    { recipient_company: companyName || title },
+    {},
+  ];
 
-  if (!result.response.ok) {
-    const message = `${result.text || ""}`.toLowerCase();
-    const titleRejected =
-      message.includes("title") ||
-      message.includes("unsupported") ||
-      message.includes("validation") ||
-      result.response.status === 400;
+  let lastFailure = null;
 
-    if (titleRejected) {
-      console.warn(
-        "Trumpet Create Pod rejected title; retrying without title",
-        {
-          status: result.response.status,
-          details: result.text,
-          intendedTitle: title,
-        }
-      );
-      result = await post(baseBody);
+  for (const naming of namingAttempts) {
+    const body = { ...baseBody, ...naming };
+    const result = await post(body);
+
+    if (result.response.ok) {
+      console.log("Trumpet Create Pod succeeded", {
+        requestedTitle: title,
+        namingFieldsUsed: Object.keys(naming),
+        podId: result.json?.data?.id ?? null,
+        liveUrl: result.json?.data?.live_url ?? null,
+      });
+
+      return {
+        ...result.json,
+        requestedTitle: title,
+        namingFieldsUsed: Object.keys(naming),
+      };
     }
+
+    lastFailure = result;
+    console.warn("Trumpet Create Pod attempt failed; trying next naming shape", {
+      namingFields: Object.keys(naming),
+      status: result.response.status,
+      details: result.text,
+    });
   }
 
-  if (!result.response.ok) {
-    const error = new Error("Trumpet create pod failed");
-    error.status = result.response.status;
-    error.details = result.text;
-    throw error;
-  }
-
-  return {
-    ...result.json,
-    requestedTitle: title,
-  };
+  const error = new Error("Trumpet create pod failed");
+  error.status = lastFailure?.response?.status;
+  error.details = lastFailure?.text;
+  throw error;
 }
 
 async function provisionPodForCompany(attioApiKey, trumpetConfig, recordId) {
@@ -557,27 +606,31 @@ async function provisionPodForCompany(attioApiKey, trumpetConfig, recordId) {
     apiKey: trumpetConfig.apiKey,
     templateId: trumpetConfig.templateId,
     title,
+    companyName,
     ownerEmail: trumpetConfig.ownerEmail,
   });
 
-  const liveUrl = created?.data?.live_url ?? null;
+  const apiLiveUrl = created?.data?.live_url ?? null;
   const podId = created?.data?.id ?? null;
+  const matchablePodUrl = buildMatchablePodUrl(podId, apiLiveUrl);
 
-  if (!liveUrl) {
-    const error = new Error("Trumpet create pod returned no live_url");
+  if (!matchablePodUrl) {
+    const error = new Error("Trumpet create pod returned no pod id/live_url");
     error.details = JSON.stringify(created);
     throw error;
   }
 
-  await updateCompanyPodUrl(attioApiKey, recordId, liveUrl);
+  await updateCompanyPodUrl(attioApiKey, recordId, matchablePodUrl);
 
   return {
     action: "provisioned",
     recordId,
     companyName,
     podTitle: title,
+    namingFieldsUsed: created.namingFieldsUsed ?? [],
     podId,
-    liveUrl,
+    apiLiveUrl,
+    matchablePodUrl,
   };
 }
 
@@ -673,6 +726,22 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body;
+
+    // Always log first so we can see whether Attio/Trumpet reached this function.
+    console.log("Incoming /api/trumpet request", {
+      method: req.method,
+      contentType: req.headers["content-type"] ?? null,
+      hasAttioSignature: Boolean(
+        req.headers["attio-signature"] ?? req.headers["x-attio-signature"]
+      ),
+      hasTrumpetSignature: Boolean(
+        req.headers["trumpet-signature"] ?? req.headers["Trumpet-Signature"]
+      ),
+      bodyType: body === null ? "null" : typeof body,
+      bodyKeys:
+        body && typeof body === "object" ? Object.keys(body).slice(0, 20) : [],
+      isAttioShape: isAttioWebhookPayload(body),
+    });
 
     if (!body || typeof body !== "object") {
       return res.status(400).json({ error: "Invalid JSON payload" });
