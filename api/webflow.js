@@ -26,6 +26,13 @@ function companyRecordIdFromPerson(person) {
   return companyValues[0]?.target_record_id ?? null;
 }
 
+function emailDomain(email) {
+  if (!email || typeof email !== "string") return null;
+  const at = email.lastIndexOf("@");
+  if (at <= 0 || at === email.length - 1) return null;
+  return email.slice(at + 1).toLowerCase();
+}
+
 async function findPersonByEmail(apiKey, email) {
   const response = await fetch(
     "https://api.attio.com/v2/objects/people/records/query",
@@ -53,6 +60,60 @@ async function findPersonByEmail(apiKey, email) {
   return result.data?.[0] ?? null;
 }
 
+async function getPersonById(apiKey, recordId) {
+  const response = await fetch(
+    `https://api.attio.com/v2/objects/people/records/${recordId}`,
+    {
+      method: "GET",
+      headers: attioHeaders(apiKey),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const error = new Error("Attio get person failed");
+    error.status = response.status;
+    error.details = errorText;
+    throw error;
+  }
+
+  const result = await response.json();
+  return result.data ?? null;
+}
+
+async function resolvePersonWithCompany(apiKey, person, { retries = 3 } = {}) {
+  if (!person?.id?.record_id) return person;
+
+  let current = person;
+  if (companyRecordIdFromPerson(current)) {
+    return current;
+  }
+
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+    }
+
+    try {
+      current = (await getPersonById(apiKey, person.id.record_id)) ?? current;
+    } catch (error) {
+      console.warn("Attio person refresh for company failed", {
+        status: error.status,
+        details: error.details,
+        recordId: person.id.record_id,
+        attempt,
+      });
+      break;
+    }
+
+    if (companyRecordIdFromPerson(current)) {
+      return current;
+    }
+  }
+
+  return current;
+}
+
 async function createPerson(apiKey, { email, name, campaign }) {
   const values = {
     email_addresses: [
@@ -76,6 +137,28 @@ async function createPerson(apiKey, { email, name, campaign }) {
         first_name: firstName,
         last_name: lastName,
         full_name: name,
+      },
+    ];
+  }
+
+  // Explicitly link/create Company by email domain so the relationship
+  // is available before we create the GTM Signal.
+  const domain = emailDomain(email);
+  if (domain) {
+    values.company = [
+      {
+        target_object: "companies",
+        target_record_reference: {
+          match: {
+            domains: [{ domain }],
+          },
+          if_unmatched: "create",
+          if_multiple_matches: "error",
+          create: {
+            name: domain,
+            domains: [{ domain }],
+          },
+        },
       },
     ];
   }
@@ -270,22 +353,54 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     });
   }
 
+  // Attio may attach Company just after Person create; refresh before Signal.
+  person = await resolvePersonWithCompany(apiKey, person);
+
   const personRecordId = person.id?.record_id;
   const companyRecordId = companyRecordIdFromPerson(person);
-  const campaignUpdates = personCreated
-    ? {
-        personCampaignUpdated: true,
-        companyCampaignUpdated: false,
-        personCreated: true,
-      }
-    : {
-        ...(await appendIrmCampaignToPersonAndCompany(
+
+  let campaignUpdates = {
+    personCampaignUpdated: personCreated,
+    companyCampaignUpdated: false,
+    personCreated,
+  };
+
+  if (personCreated) {
+    // Person already got IRM campaign on create; still update Company if linked.
+    if (companyRecordId) {
+      try {
+        await appendCampaign(
           apiKey,
-          personRecordId,
-          companyRecordId
-        )),
-        personCreated: false,
-      };
+          "companies",
+          companyRecordId,
+          IRM_PERSON_COMPANY_CAMPAIGN
+        );
+        campaignUpdates.companyCampaignUpdated = true;
+      } catch (error) {
+        console.error("Attio Company campaign update error:", {
+          status: error.status,
+          details: error.details,
+          companyRecordId,
+          campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+        });
+      }
+    }
+  } else {
+    campaignUpdates = {
+      ...(await appendIrmCampaignToPersonAndCompany(
+        apiKey,
+        personRecordId,
+        companyRecordId
+      )),
+      personCreated: false,
+    };
+  }
+
+  console.log("IRM person/company resolved for GTM Signal", {
+    personRecordId,
+    companyRecordId,
+    personCreated,
+  });
 
   let existingSignal;
   try {
