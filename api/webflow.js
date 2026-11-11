@@ -52,6 +52,33 @@ async function findPersonByEmail(apiKey, email) {
   return result.data?.[0] ?? null;
 }
 
+async function findGtmSignalByName(apiKey, signalName) {
+  const response = await fetch(
+    `https://api.attio.com/v2/objects/${ATTIO_GTM_SIGNAL_OBJECT}/records/query`,
+    {
+      method: "POST",
+      headers: attioHeaders(apiKey),
+      body: JSON.stringify({
+        filter: {
+          name: signalName,
+        },
+        limit: 1,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const error = new Error("Attio GTM Signal query failed");
+    error.status = response.status;
+    error.details = errorText;
+    throw error;
+  }
+
+  const result = await response.json();
+  return result.data?.[0] ?? null;
+}
+
 async function createIrmGtmSignal(res, formData, apiKey) {
   const email = formData.Email?.trim().toLowerCase();
 
@@ -62,6 +89,38 @@ async function createIrmGtmSignal(res, formData, apiKey) {
   }
 
   const signalName = `requested recordings - IRM UK 2026 London registration - ${email}`;
+
+  let existingSignal;
+  try {
+    existingSignal = await findGtmSignalByName(apiKey, signalName);
+  } catch (error) {
+    console.error("Attio GTM Signal query error:", {
+      status: error.status,
+      details: error.details,
+      signalName,
+    });
+
+    return res.status(502).json({
+      error: "Failed to look up GTM Signal in Attio",
+    });
+  }
+
+  if (existingSignal) {
+    const recordId = existingSignal.id?.record_id ?? null;
+
+    console.log("Attio GTM Signal already exists; skipping create", {
+      recordId,
+      name: signalName,
+    });
+
+    return res.status(200).json({
+      success: true,
+      gtmSignalCreated: false,
+      alreadyExists: true,
+      recordId,
+      name: signalName,
+    });
+  }
 
   let person;
   try {
