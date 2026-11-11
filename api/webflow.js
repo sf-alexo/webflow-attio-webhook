@@ -53,6 +53,56 @@ async function findPersonByEmail(apiKey, email) {
   return result.data?.[0] ?? null;
 }
 
+async function createPerson(apiKey, { email, name, campaign }) {
+  const values = {
+    email_addresses: [
+      {
+        email_address: email,
+      },
+    ],
+  };
+
+  if (campaign) {
+    values.campaign = [{ option: campaign }];
+  }
+
+  if (name) {
+    const parts = name.split(/\s+/);
+    const firstName = parts[0];
+    const lastName = parts.slice(1).join(" ") || firstName;
+
+    values.name = [
+      {
+        first_name: firstName,
+        last_name: lastName,
+        full_name: name,
+      },
+    ];
+  }
+
+  const response = await fetch(
+    "https://api.attio.com/v2/objects/people/records",
+    {
+      method: "POST",
+      headers: attioHeaders(apiKey),
+      body: JSON.stringify({
+        data: { values },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const error = new Error("Attio people create failed");
+    error.status = response.status;
+    error.details = errorText;
+    throw error;
+  }
+
+  const result = await response.json();
+  return result.data ?? null;
+}
+
 async function findGtmSignalByName(apiKey, signalName) {
   const response = await fetch(
     `https://api.attio.com/v2/objects/${ATTIO_GTM_SIGNAL_OBJECT}/records/query`,
@@ -159,6 +209,7 @@ async function appendIrmCampaignToPersonAndCompany(
 
 async function createIrmGtmSignal(res, formData, apiKey) {
   const email = formData.Email?.trim().toLowerCase();
+  const name = formData.Name?.trim();
 
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({
@@ -169,6 +220,7 @@ async function createIrmGtmSignal(res, formData, apiKey) {
   const signalName = `requested recordings - IRM UK 2026 London registration - ${email}`;
 
   let person;
+  let personCreated = false;
   try {
     person = await findPersonByEmail(apiKey, email);
   } catch (error) {
@@ -184,19 +236,56 @@ async function createIrmGtmSignal(res, formData, apiKey) {
   }
 
   if (!person) {
-    return res.status(404).json({
-      error: "Person not found in Attio",
+    try {
+      person = await createPerson(apiKey, {
+        email,
+        name,
+        campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+      });
+      personCreated = true;
+
+      console.log("Attio Person created for IRM registration", {
+        recordId: person?.id?.record_id ?? null,
+        email,
+        name: name ?? null,
+        campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+      });
+    } catch (error) {
+      console.error("Attio Person create error:", {
+        status: error.status,
+        details: error.details,
+        email,
+      });
+
+      return res.status(502).json({
+        error: "Failed to create Person in Attio",
+      });
+    }
+  }
+
+  if (!person) {
+    return res.status(502).json({
+      error: "Failed to create Person in Attio",
       email,
     });
   }
 
   const personRecordId = person.id?.record_id;
   const companyRecordId = companyRecordIdFromPerson(person);
-  const campaignUpdates = await appendIrmCampaignToPersonAndCompany(
-    apiKey,
-    personRecordId,
-    companyRecordId
-  );
+  const campaignUpdates = personCreated
+    ? {
+        personCampaignUpdated: true,
+        companyCampaignUpdated: false,
+        personCreated: true,
+      }
+    : {
+        ...(await appendIrmCampaignToPersonAndCompany(
+          apiKey,
+          personRecordId,
+          companyRecordId
+        )),
+        personCreated: false,
+      };
 
   let existingSignal;
   try {
