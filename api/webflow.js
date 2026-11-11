@@ -7,6 +7,7 @@ const GTM_SIGNAL_SOURCE = "website";
 const GTM_SIGNAL_LEVEL = "person";
 const GTM_SIGNAL_TYPE = "webinar registration";
 const GTM_SIGNAL_CAMPAIGN = "2026-11 IRM UK Conference";
+const IRM_PERSON_COMPANY_CAMPAIGN = "2026-03 IRM UK";
 
 function attioHeaders(apiKey) {
   return {
@@ -79,6 +80,83 @@ async function findGtmSignalByName(apiKey, signalName) {
   return result.data?.[0] ?? null;
 }
 
+async function appendCampaign(apiKey, objectSlug, recordId, campaign) {
+  const response = await fetch(
+    `https://api.attio.com/v2/objects/${objectSlug}/records/${recordId}`,
+    {
+      method: "PATCH",
+      headers: attioHeaders(apiKey),
+      body: JSON.stringify({
+        data: {
+          values: {
+            // PATCH prepends multiselect values.
+            campaign: [{ option: campaign }],
+          },
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const error = new Error(`Attio ${objectSlug} campaign update failed`);
+    error.status = response.status;
+    error.details = errorText;
+    throw error;
+  }
+
+  return response.json();
+}
+
+async function appendIrmCampaignToPersonAndCompany(
+  apiKey,
+  personRecordId,
+  companyRecordId
+) {
+  const result = {
+    personCampaignUpdated: false,
+    companyCampaignUpdated: false,
+  };
+
+  try {
+    await appendCampaign(
+      apiKey,
+      "people",
+      personRecordId,
+      IRM_PERSON_COMPANY_CAMPAIGN
+    );
+    result.personCampaignUpdated = true;
+  } catch (error) {
+    console.error("Attio Person campaign update error:", {
+      status: error.status,
+      details: error.details,
+      personRecordId,
+      campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+    });
+  }
+
+  if (companyRecordId) {
+    try {
+      await appendCampaign(
+        apiKey,
+        "companies",
+        companyRecordId,
+        IRM_PERSON_COMPANY_CAMPAIGN
+      );
+      result.companyCampaignUpdated = true;
+    } catch (error) {
+      console.error("Attio Company campaign update error:", {
+        status: error.status,
+        details: error.details,
+        companyRecordId,
+        campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+      });
+    }
+  }
+
+  return result;
+}
+
 async function createIrmGtmSignal(res, formData, apiKey) {
   const email = formData.Email?.trim().toLowerCase();
 
@@ -89,38 +167,6 @@ async function createIrmGtmSignal(res, formData, apiKey) {
   }
 
   const signalName = `requested recordings - IRM UK 2026 London registration - ${email}`;
-
-  let existingSignal;
-  try {
-    existingSignal = await findGtmSignalByName(apiKey, signalName);
-  } catch (error) {
-    console.error("Attio GTM Signal query error:", {
-      status: error.status,
-      details: error.details,
-      signalName,
-    });
-
-    return res.status(502).json({
-      error: "Failed to look up GTM Signal in Attio",
-    });
-  }
-
-  if (existingSignal) {
-    const recordId = existingSignal.id?.record_id ?? null;
-
-    console.log("Attio GTM Signal already exists; skipping create", {
-      recordId,
-      name: signalName,
-    });
-
-    return res.status(200).json({
-      success: true,
-      gtmSignalCreated: false,
-      alreadyExists: true,
-      recordId,
-      name: signalName,
-    });
-  }
 
   let person;
   try {
@@ -146,6 +192,48 @@ async function createIrmGtmSignal(res, formData, apiKey) {
 
   const personRecordId = person.id?.record_id;
   const companyRecordId = companyRecordIdFromPerson(person);
+  const campaignUpdates = await appendIrmCampaignToPersonAndCompany(
+    apiKey,
+    personRecordId,
+    companyRecordId
+  );
+
+  let existingSignal;
+  try {
+    existingSignal = await findGtmSignalByName(apiKey, signalName);
+  } catch (error) {
+    console.error("Attio GTM Signal query error:", {
+      status: error.status,
+      details: error.details,
+      signalName,
+    });
+
+    return res.status(502).json({
+      error: "Failed to look up GTM Signal in Attio",
+      ...campaignUpdates,
+    });
+  }
+
+  if (existingSignal) {
+    const recordId = existingSignal.id?.record_id ?? null;
+
+    console.log("Attio GTM Signal already exists; skipping create", {
+      recordId,
+      name: signalName,
+      ...campaignUpdates,
+    });
+
+    return res.status(200).json({
+      success: true,
+      gtmSignalCreated: false,
+      alreadyExists: true,
+      recordId,
+      name: signalName,
+      personCampaign: IRM_PERSON_COMPANY_CAMPAIGN,
+      ...campaignUpdates,
+    });
+  }
+
   const createdAt = new Date().toISOString();
 
   const values = {
@@ -196,6 +284,7 @@ async function createIrmGtmSignal(res, formData, apiKey) {
 
     return res.status(502).json({
       error: "Failed to create GTM Signal in Attio",
+      ...campaignUpdates,
     });
   }
 
@@ -208,9 +297,11 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     level: GTM_SIGNAL_LEVEL,
     signalType: GTM_SIGNAL_TYPE,
     campaign: GTM_SIGNAL_CAMPAIGN,
+    personCampaign: IRM_PERSON_COMPANY_CAMPAIGN,
     occurredAt: createdAt,
     personRecordId,
     companyRecordId,
+    ...campaignUpdates,
   });
 
   return res.status(200).json({
@@ -221,9 +312,11 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     level: GTM_SIGNAL_LEVEL,
     signalType: GTM_SIGNAL_TYPE,
     campaign: GTM_SIGNAL_CAMPAIGN,
+    personCampaign: IRM_PERSON_COMPANY_CAMPAIGN,
     occurredAt: createdAt,
     personRecordId,
     companyRecordId,
+    ...campaignUpdates,
   });
 }
 
