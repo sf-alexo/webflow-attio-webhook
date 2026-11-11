@@ -94,7 +94,7 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     source: { option: GTM_SIGNAL_SOURCE },
     level: { option: GTM_SIGNAL_LEVEL },
     signal_type: { option: GTM_SIGNAL_TYPE },
-    campaign: { option: GTM_SIGNAL_CAMPAIGN },
+    campaign: GTM_SIGNAL_CAMPAIGN,
     occurred_at: createdAt,
     person: [
       {
