@@ -5,6 +5,9 @@ const IRM_POSITION_LINK = "irm-uk-2026-london-november";
 const ATTIO_GTM_SIGNAL_OBJECT = "gtm_signals";
 const GTM_SIGNAL_SOURCE = "website";
 const GTM_SIGNAL_LEVEL = "person";
+const GTM_SIGNAL_TYPE = "webinar registration";
+const GTM_SIGNAL_CAMPAIGN = "2026-11 IRM UK Conference";
+const GTM_SIGNAL_REPORT_VALUE = 1;
 
 function attioHeaders(apiKey) {
   return {
@@ -52,16 +55,14 @@ async function findPersonByEmail(apiKey, email) {
 
 async function createIrmGtmSignal(res, formData, apiKey) {
   const email = formData.Email?.trim().toLowerCase();
-  const name = formData.Name?.trim();
-  const signalName = `requested recordings - IRM UK 2026 London registration - ${
-    name || "Unknown"
-  }`;
 
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({
       error: "A valid email is required",
     });
   }
+
+  const signalName = `requested recordings - IRM UK 2026 London registration - ${email}`;
 
   let person;
   try {
@@ -93,6 +94,9 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     name: signalName,
     source: { option: GTM_SIGNAL_SOURCE },
     level: { option: GTM_SIGNAL_LEVEL },
+    signal_type: { option: GTM_SIGNAL_TYPE },
+    campaign: { option: GTM_SIGNAL_CAMPAIGN },
+    gtm_signal_uchest_v_otchete_0_1: GTM_SIGNAL_REPORT_VALUE,
     occurred_at: createdAt,
     person: [
       {
@@ -145,6 +149,8 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     name: signalName,
     source: GTM_SIGNAL_SOURCE,
     level: GTM_SIGNAL_LEVEL,
+    signalType: GTM_SIGNAL_TYPE,
+    campaign: GTM_SIGNAL_CAMPAIGN,
     occurredAt: createdAt,
     personRecordId,
     companyRecordId,
@@ -156,6 +162,8 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     name: signalName,
     source: GTM_SIGNAL_SOURCE,
     level: GTM_SIGNAL_LEVEL,
+    signalType: GTM_SIGNAL_TYPE,
+    campaign: GTM_SIGNAL_CAMPAIGN,
     occurredAt: createdAt,
     personRecordId,
     companyRecordId,
