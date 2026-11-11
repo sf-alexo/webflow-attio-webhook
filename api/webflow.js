@@ -93,7 +93,6 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     name: signalName,
     source: { option: GTM_SIGNAL_SOURCE },
     level: { option: GTM_SIGNAL_LEVEL },
-    created_at: createdAt,
     occurred_at: createdAt,
     person: [
       {
