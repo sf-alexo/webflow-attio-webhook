@@ -7,7 +7,6 @@ const GTM_SIGNAL_SOURCE = "website";
 const GTM_SIGNAL_LEVEL = "person";
 const GTM_SIGNAL_TYPE = "webinar registration";
 const GTM_SIGNAL_CAMPAIGN = "2026-11 IRM UK Conference";
-const GTM_SIGNAL_REPORT_VALUE = 1;
 
 function attioHeaders(apiKey) {
   return {
@@ -96,7 +95,6 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     level: { option: GTM_SIGNAL_LEVEL },
     signal_type: { option: GTM_SIGNAL_TYPE },
     campaign: { option: GTM_SIGNAL_CAMPAIGN },
-    gtm_signal_uchest_v_otchete_0_1: GTM_SIGNAL_REPORT_VALUE,
     occurred_at: createdAt,
     person: [
       {
