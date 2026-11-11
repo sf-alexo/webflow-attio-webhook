@@ -4,6 +4,7 @@ const ATTIO_POSITION_NAME = "State of Analytics in the Age of AI";
 const IRM_POSITION_LINK = "irm-uk-2026-london-november";
 const ATTIO_GTM_SIGNAL_OBJECT = "gtm_signals";
 const GTM_SIGNAL_SOURCE = "website";
+const GTM_SIGNAL_LEVEL = "person";
 
 function attioHeaders(apiKey) {
   return {
@@ -13,11 +14,103 @@ function attioHeaders(apiKey) {
   };
 }
 
+function companyRecordIdFromPerson(person) {
+  const companyValues = person?.values?.company;
+  if (!Array.isArray(companyValues) || companyValues.length === 0) {
+    return null;
+  }
+
+  return companyValues[0]?.target_record_id ?? null;
+}
+
+async function findPersonByEmail(apiKey, email) {
+  const response = await fetch(
+    "https://api.attio.com/v2/objects/people/records/query",
+    {
+      method: "POST",
+      headers: attioHeaders(apiKey),
+      body: JSON.stringify({
+        filter: {
+          email_addresses: email,
+        },
+        limit: 1,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const error = new Error("Attio people query failed");
+    error.status = response.status;
+    error.details = errorText;
+    throw error;
+  }
+
+  const result = await response.json();
+  return result.data?.[0] ?? null;
+}
+
 async function createIrmGtmSignal(res, formData, apiKey) {
+  const email = formData.Email?.trim().toLowerCase();
   const name = formData.Name?.trim();
   const signalName = `requested recordings - IRM UK 2026 London registration - ${
     name || "Unknown"
-  }`; 
+  }`;
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({
+      error: "A valid email is required",
+    });
+  }
+
+  let person;
+  try {
+    person = await findPersonByEmail(apiKey, email);
+  } catch (error) {
+    console.error("Attio query error:", {
+      status: error.status,
+      details: error.details,
+      email,
+    });
+
+    return res.status(502).json({
+      error: "Failed to look up Person in Attio",
+    });
+  }
+
+  if (!person) {
+    return res.status(404).json({
+      error: "Person not found in Attio",
+      email,
+    });
+  }
+
+  const personRecordId = person.id?.record_id;
+  const companyRecordId = companyRecordIdFromPerson(person);
+  const createdAt = new Date().toISOString();
+
+  const values = {
+    name: signalName,
+    source: { option: GTM_SIGNAL_SOURCE },
+    level: { option: GTM_SIGNAL_LEVEL },
+    created_at: createdAt,
+    occurred_at: createdAt,
+    person: [
+      {
+        target_object: "people",
+        target_record_id: personRecordId,
+      },
+    ],
+  };
+
+  if (companyRecordId) {
+    values.company = [
+      {
+        target_object: "companies",
+        target_record_id: companyRecordId,
+      },
+    ];
+  }
 
   const response = await fetch(
     `https://api.attio.com/v2/objects/${ATTIO_GTM_SIGNAL_OBJECT}/records`,
@@ -25,12 +118,7 @@ async function createIrmGtmSignal(res, formData, apiKey) {
       method: "POST",
       headers: attioHeaders(apiKey),
       body: JSON.stringify({
-        data: {
-          values: {
-            name: signalName,
-            source: { option: GTM_SIGNAL_SOURCE },
-          },
-        },
+        data: { values },
       }),
     }
   );
@@ -42,6 +130,8 @@ async function createIrmGtmSignal(res, formData, apiKey) {
       status: response.status,
       details: errorText,
       signalName,
+      personRecordId,
+      companyRecordId,
     });
 
     return res.status(502).json({
@@ -55,6 +145,10 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     recordId: result.data?.id?.record_id,
     name: signalName,
     source: GTM_SIGNAL_SOURCE,
+    level: GTM_SIGNAL_LEVEL,
+    occurredAt: createdAt,
+    personRecordId,
+    companyRecordId,
   });
 
   return res.status(200).json({
@@ -62,6 +156,10 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     gtmSignalCreated: true,
     name: signalName,
     source: GTM_SIGNAL_SOURCE,
+    level: GTM_SIGNAL_LEVEL,
+    occurredAt: createdAt,
+    personRecordId,
+    companyRecordId,
   });
 }
 
