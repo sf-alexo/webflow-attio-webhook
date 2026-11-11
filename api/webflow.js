@@ -17,7 +17,7 @@ async function createIrmGtmSignal(res, formData, apiKey) {
   const name = formData.Name?.trim();
   const signalName = `requested recordings - IRM UK 2026 London registration - ${
     name || "Unknown"
-  }`;
+  }`; 
 
   const response = await fetch(
     `https://api.attio.com/v2/objects/${ATTIO_GTM_SIGNAL_OBJECT}/records`,
