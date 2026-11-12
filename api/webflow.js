@@ -1,4 +1,3 @@
-const CAMPAIGN = "2026-10 SUMMIT";
 const ATTIO_POSITION_LINK = "state-of-analytics-in-the-age-of-ai";
 const ATTIO_POSITION_NAME = "State of Analytics in the Age of AI";
 const IRM_POSITION_LINK = "irm-uk-2026-london-november";
@@ -6,8 +5,22 @@ const ATTIO_GTM_SIGNAL_OBJECT = "gtm_signals";
 const GTM_SIGNAL_SOURCE = "website";
 const GTM_SIGNAL_LEVEL = "person";
 const GTM_SIGNAL_TYPE = "webinar registration";
-const GTM_SIGNAL_CAMPAIGN = "2026-11 IRM UK Conference";
-const IRM_PERSON_COMPANY_CAMPAIGN = "2026-03 IRM UK";
+
+const IRM_EVENT = {
+  label: "IRM",
+  signalNamePrefix:
+    "requested recordings - IRM UK 2026 London registration",
+  signalCampaign: "2026-11 IRM UK Conference",
+  personCompanyCampaign: "2026-03 IRM UK",
+};
+
+const SUMMIT_EVENT = {
+  label: "Summit",
+  signalNamePrefix:
+    "requested recordings - State of Analytics in the Age of AI registration",
+  signalCampaign: "2026-10 SUMMIT",
+  personCompanyCampaign: "2026-10 SUMMIT",
+};
 
 function attioHeaders(apiKey) {
   return {
@@ -241,10 +254,11 @@ async function appendCampaign(apiKey, objectSlug, recordId, campaign) {
   return response.json();
 }
 
-async function appendIrmCampaignToPersonAndCompany(
+async function appendCampaignToPersonAndCompany(
   apiKey,
   personRecordId,
-  companyRecordId
+  companyRecordId,
+  campaign
 ) {
   const result = {
     personCampaignUpdated: false,
@@ -252,37 +266,27 @@ async function appendIrmCampaignToPersonAndCompany(
   };
 
   try {
-    await appendCampaign(
-      apiKey,
-      "people",
-      personRecordId,
-      IRM_PERSON_COMPANY_CAMPAIGN
-    );
+    await appendCampaign(apiKey, "people", personRecordId, campaign);
     result.personCampaignUpdated = true;
   } catch (error) {
     console.error("Attio Person campaign update error:", {
       status: error.status,
       details: error.details,
       personRecordId,
-      campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+      campaign,
     });
   }
 
   if (companyRecordId) {
     try {
-      await appendCampaign(
-        apiKey,
-        "companies",
-        companyRecordId,
-        IRM_PERSON_COMPANY_CAMPAIGN
-      );
+      await appendCampaign(apiKey, "companies", companyRecordId, campaign);
       result.companyCampaignUpdated = true;
     } catch (error) {
       console.error("Attio Company campaign update error:", {
         status: error.status,
         details: error.details,
         companyRecordId,
-        campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+        campaign,
       });
     }
   }
@@ -290,9 +294,15 @@ async function appendIrmCampaignToPersonAndCompany(
   return result;
 }
 
-async function createIrmGtmSignal(res, formData, apiKey) {
+async function createRegistrationGtmSignal(res, formData, apiKey, event) {
   const email = formData.Email?.trim().toLowerCase();
   const name = formData.Name?.trim();
+  const {
+    label,
+    signalNamePrefix,
+    signalCampaign,
+    personCompanyCampaign,
+  } = event;
 
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({
@@ -300,7 +310,7 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     });
   }
 
-  const signalName = `requested recordings - IRM UK 2026 London registration - ${email}`;
+  const signalName = `${signalNamePrefix} - ${email}`;
 
   let person;
   let personCreated = false;
@@ -323,15 +333,15 @@ async function createIrmGtmSignal(res, formData, apiKey) {
       person = await createPerson(apiKey, {
         email,
         name,
-        campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+        campaign: personCompanyCampaign,
       });
       personCreated = true;
 
-      console.log("Attio Person created for IRM registration", {
+      console.log(`Attio Person created for ${label} registration`, {
         recordId: person?.id?.record_id ?? null,
         email,
         name: name ?? null,
-        campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+        campaign: personCompanyCampaign,
       });
     } catch (error) {
       console.error("Attio Person create error:", {
@@ -366,14 +376,14 @@ async function createIrmGtmSignal(res, formData, apiKey) {
   };
 
   if (personCreated) {
-    // Person already got IRM campaign on create; still update Company if linked.
+    // Person already got campaign on create; still update Company if linked.
     if (companyRecordId) {
       try {
         await appendCampaign(
           apiKey,
           "companies",
           companyRecordId,
-          IRM_PERSON_COMPANY_CAMPAIGN
+          personCompanyCampaign
         );
         campaignUpdates.companyCampaignUpdated = true;
       } catch (error) {
@@ -381,22 +391,23 @@ async function createIrmGtmSignal(res, formData, apiKey) {
           status: error.status,
           details: error.details,
           companyRecordId,
-          campaign: IRM_PERSON_COMPANY_CAMPAIGN,
+          campaign: personCompanyCampaign,
         });
       }
     }
   } else {
     campaignUpdates = {
-      ...(await appendIrmCampaignToPersonAndCompany(
+      ...(await appendCampaignToPersonAndCompany(
         apiKey,
         personRecordId,
-        companyRecordId
+        companyRecordId,
+        personCompanyCampaign
       )),
       personCreated: false,
     };
   }
 
-  console.log("IRM person/company resolved for GTM Signal", {
+  console.log(`${label} person/company resolved for GTM Signal`, {
     personRecordId,
     companyRecordId,
     personCreated,
@@ -433,7 +444,7 @@ async function createIrmGtmSignal(res, formData, apiKey) {
       alreadyExists: true,
       recordId,
       name: signalName,
-      personCampaign: IRM_PERSON_COMPANY_CAMPAIGN,
+      personCampaign: personCompanyCampaign,
       ...campaignUpdates,
     });
   }
@@ -445,7 +456,7 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     source: { option: GTM_SIGNAL_SOURCE },
     level: { option: GTM_SIGNAL_LEVEL },
     signal_type: { option: GTM_SIGNAL_TYPE },
-    campaign: GTM_SIGNAL_CAMPAIGN,
+    campaign: signalCampaign,
     occurred_at: createdAt,
     person: [
       {
@@ -500,8 +511,8 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     source: GTM_SIGNAL_SOURCE,
     level: GTM_SIGNAL_LEVEL,
     signalType: GTM_SIGNAL_TYPE,
-    campaign: GTM_SIGNAL_CAMPAIGN,
-    personCampaign: IRM_PERSON_COMPANY_CAMPAIGN,
+    campaign: signalCampaign,
+    personCampaign: personCompanyCampaign,
     occurredAt: createdAt,
     personRecordId,
     companyRecordId,
@@ -515,139 +526,12 @@ async function createIrmGtmSignal(res, formData, apiKey) {
     source: GTM_SIGNAL_SOURCE,
     level: GTM_SIGNAL_LEVEL,
     signalType: GTM_SIGNAL_TYPE,
-    campaign: GTM_SIGNAL_CAMPAIGN,
-    personCampaign: IRM_PERSON_COMPANY_CAMPAIGN,
+    campaign: signalCampaign,
+    personCampaign: personCompanyCampaign,
     occurredAt: createdAt,
     personRecordId,
     companyRecordId,
     ...campaignUpdates,
-  });
-}
-
-async function saveSummitPerson(res, formData, apiKey) {
-  const email = formData.Email?.trim().toLowerCase();
-  const name = formData.Name?.trim();
-
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.status(400).json({
-      error: "A valid email is required",
-    });
-  }
-
-  const headers = attioHeaders(apiKey);
-
-  const queryResponse = await fetch(
-    "https://api.attio.com/v2/objects/people/records/query",
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        filter: {
-          email_addresses: email,
-        },
-        limit: 1,
-      }),
-    }
-  );
-
-  if (!queryResponse.ok) {
-    const errorText = await queryResponse.text();
-
-    console.error("Attio query error:", {
-      status: queryResponse.status,
-      details: errorText,
-    });
-
-    return res.status(502).json({
-      error: "Failed to look up Person in Attio",
-    });
-  }
-
-  const queryResult = await queryResponse.json();
-  const existingPerson = queryResult.data?.[0];
-
-  let response;
-  let created = false;
-
-  if (existingPerson) {
-    // Existing person: append campaign only (PATCH prepends multiselect values).
-    response = await fetch(
-      `https://api.attio.com/v2/objects/people/records/${existingPerson.id.record_id}`,
-      {
-        method: "PATCH",
-        headers,
-        body: JSON.stringify({
-          data: {
-            values: {
-              campaign: [{ option: CAMPAIGN }],
-            },
-          },
-        }),
-      }
-    );
-  } else {
-    const values = {
-      email_addresses: [
-        {
-          email_address: email,
-        },
-      ],
-      campaign: [{ option: CAMPAIGN }],
-    };
-
-    if (name) {
-      const parts = name.split(/\s+/);
-      const firstName = parts[0];
-      const lastName = parts.slice(1).join(" ") || firstName;
-
-      values.name = [
-        {
-          first_name: firstName,
-          last_name: lastName,
-          full_name: name,
-        },
-      ];
-    }
-
-    response = await fetch("https://api.attio.com/v2/objects/people/records", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        data: { values },
-      }),
-    });
-    created = true;
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text();
-
-    console.error("Attio API error:", {
-      status: response.status,
-      details: errorText,
-      created,
-    });
-
-    return res.status(502).json({
-      error: created
-        ? "Failed to create Person in Attio"
-        : "Failed to update campaign in Attio",
-    });
-  }
-
-  const result = await response.json();
-
-  console.log("Attio Person saved", {
-    recordId: result.data?.id?.record_id,
-    created,
-    campaign: CAMPAIGN,
-  });
-
-  return res.status(200).json({
-    success: true,
-    personSaved: true,
-    created,
-    campaign: CAMPAIGN,
   });
 }
 
@@ -686,7 +570,7 @@ export default async function handler(req, res) {
     }
 
     if (positionLink === IRM_POSITION_LINK) {
-      return createIrmGtmSignal(res, formData, apiKey);
+      return createRegistrationGtmSignal(res, formData, apiKey, IRM_EVENT);
     }
 
     const shouldRunSummitAttio =
@@ -703,7 +587,7 @@ export default async function handler(req, res) {
       });
     }
 
-    return saveSummitPerson(res, formData, apiKey);
+    return createRegistrationGtmSignal(res, formData, apiKey, SUMMIT_EVENT);
   } catch (error) {
     console.error("Webhook processing failed:", error);
 
