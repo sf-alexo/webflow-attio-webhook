@@ -169,7 +169,6 @@ async function createPerson(apiKey, { email, name, campaign }) {
           if_multiple_matches: "error",
           create: {
             name: domain,
-            domains: [{ domain }],
           },
         },
       },
